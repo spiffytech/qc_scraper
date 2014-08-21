@@ -13,18 +13,18 @@ Target "Clean" (fun _ ->
 
 // Default target
 Target "Default" (fun _ ->
-    let references = []
+    let references = ["tools/HtmlAgilityPack/lib/Net45/HtmlAgilityPack.dll"]
 
     ["qc_scraper.fs"]
     |> Fsc (fun parameters ->
         {parameters with 
-            References = [];
+            References = references;
             OtherParams=["--optimize+"; "--debug:full"];
             Platform=X64
             Output="main.exe"
         }
     )
-    Copy buildDir ["qc_scraper.exe"]
+    Copy buildDir (references @ ["qc_scraper.exe"])
 )
 
 Target "Test" (fun _ ->
