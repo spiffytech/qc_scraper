@@ -4,8 +4,6 @@ open System
 open System.Net
 open System.IO
 open HtmlAgilityPack
-open System.Data
-open Mono.Data.Sqlite
 
 module QCFetcher =
     let archiveURL = "http://questionablecontent.net/archive.php"
@@ -25,11 +23,39 @@ module QCFetcher =
         | _ -> Some nodes
 
 
+module DB =
+    open System.Data
+    open Mono.Data.Sqlite
+
+    let migrateDB conn =
+        let cmd = SqliteCommand("create table comics (id int, title text, body text)", conn)
+        cmd.ExecuteNonQuery()
+        ()
+
+    let dbConnect filename =
+        let dbExists = File.Exists filename
+
+        let connStr = sprintf "Data Source =%s;" filename
+        let conn = new SqliteConnection(connStr)
+        conn.Open()
+
+        match dbExists with
+        | true -> ()
+        | false -> migrateDB conn
+
+        conn
+
+    let retrieveStored conn =
+        let cmd = new SqliteCommand("select * from comics", conn)
+        cmd
+
 module main =
     open QCFetcher
 
     [<EntryPoint>]
     let main args =
+        DB.dbConnect "blah.db"
+
         //let f = otherFetch "http://localhost"
         let f = otherFetch "http://questionablecontent.net/archive.php"
         match f with
