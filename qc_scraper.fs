@@ -7,12 +7,16 @@ open HtmlAgilityPack
 
 [<AutoOpen>]
 module DomainTypes =
-    type comic = {id:int; title:string; body:string}
+    type Comic = {id:int; title:string; body:string; link:string}
+    type ComicLink = {text:string; link:string}
 
 module QCFetcher =
     open System.Text.RegularExpressions
 
     let archiveURL = "http://questionablecontent.net/archive.php"
+
+    let makeComicLink id =
+        sprintf "http://questionablecontent.net/view.php?comic=%d" id
 
     (*
     let fetchURL url =
@@ -28,20 +32,31 @@ module QCFetcher =
         let nodes = page.DocumentNode.SelectNodes(@"//div[@id=""archive""]/a")
         match nodes with
         | null -> None
-        | _ -> Some nodes
+        | _ ->
+            nodes
+            |> Seq.map (fun node ->
+                let link =
+                    node.Attributes
+                    |> Seq.find (fun attr -> attr.Name = "href")
+                    |> (fun attr -> attr.Value)
+                {ComicLink.text=node.InnerHtml; link=link}
+            )
+            |> Some
 
     let extractID str =
         let pattern = @"^.*Comic (?<id>\d+):.*$"
         let match_ = Regex.Match(str, pattern)        
         match match_.Success with
-        | false -> None
+        | false ->
+            printfn "Could not extract comic ID: %s" str
+            None
         | true ->
             match_.Groups.["id"].Value
             |> int
             |> Some
 
     let fetchBody id =
-        let comicURL = sprintf "http://questionablecontent.net/view.php?comic=%d" id
+        let comicURL = makeComicLink id
         let web = new HtmlWeb()
         let page = web.Load(comicURL)
         //printfn "%s" page.DocumentNode.OuterHtml
@@ -113,16 +128,28 @@ module main =
         //let f = fetchArchives "http://localhost"
         let f = fetchArchives "http://questionablecontent.net/archive.php"
         match f with
-        | Some h ->
-            h
-            //|> printfn "%A"
+        | Some comicLinks ->
+            comicLinks
             |> Seq.take 3
-            |> Seq.map (fun t -> t.InnerHtml)
+            |> Seq.map (fun comicLink ->
+                let id = extractID comicLink.text
+
+                match id with
+                | None -> None
+                | Some id ->
+                    let body = fetchBody id
+                    match body with
+                    | None -> None
+                    | Some body ->
+                        let link = makeComicLink id
+                        Some {Comic.id=id; title=comicLink.text; body=body; link=link}
+            )
+            (*
+            |> Seq.map (fun comicLink -> comicLink.)
             |> Seq.map (fun h -> extractID h)
+            *)
             |> Seq.choose id
-            |> Seq.map (fun id -> fetchBody id)
-            |> Seq.choose id
-            |> Seq.iter (fun body -> printfn "%s" body.InnerHtml)
+            |> Seq.iter (fun comic -> printfn "%A" comic)
             0
         | None -> 
             printfn "None"
