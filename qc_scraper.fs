@@ -5,6 +5,9 @@ open System.Net
 open System.IO
 open HtmlAgilityPack
 
+let makeComicLink id =
+    sprintf "http://questionablecontent.net/view.php?comic=%d" id
+
 [<AutoOpen>]
 module DomainTypes =
     type Comic = {id:int; title:string; body:string; link:string}
@@ -14,9 +17,6 @@ module QCFetcher =
     open System.Text.RegularExpressions
 
     let archiveURL = "http://questionablecontent.net/archive.php"
-
-    let makeComicLink id =
-        sprintf "http://questionablecontent.net/view.php?comic=%d" id
 
     (*
     let fetchURL url =
@@ -91,6 +91,14 @@ module DB =
     open System.Data
     open Mono.Data.Sqlite
 
+    let dbToComic (row:SqliteDataReader) =
+        {
+            Comic.id = unbox<int> row.["id"];
+            title = unbox row.["title"];
+            body = unbox row.["body"];
+            link = makeComicLink @@ unbox<int> row.["id"]
+        }
+
     let migrateDB conn =
         let cmd = new SqliteCommand("create table comics (id int primary key, title text, body text)", conn)
         cmd.ExecuteNonQuery()
@@ -110,22 +118,14 @@ module DB =
 
         conn
 
-    let retrieveStored conn =
-        let cmd = new SqliteCommand("select * from comics", conn)
-        cmd
-
-    let getComic conn id =
-        let sql = "select * from comics where id=$id"
-        let cmd = new SqliteCommand(sql, conn)
-        cmd.Parameters.AddWithValue("$id", id) |> ignore
-        let res = cmd.ExecuteReader()
-        res
-
     let getComics conn =
         let sql = "select * from comics"
         let cmd = new SqliteCommand(sql, conn)
         let reader = cmd.ExecuteReader()
-        reader
+        seq {
+            while reader.Read() do
+                yield dbToComic reader
+        }
 
     let upsertComic conn comic =
         let sql = sprintf "insert or replace into comics (title, body, id) values ($title, $body, $id)"
@@ -133,8 +133,12 @@ module DB =
         cmd.Parameters.AddWithValue("$title", comic.title) |> ignore
         cmd.Parameters.AddWithValue("$body", comic.body) |> ignore
         cmd.Parameters.AddWithValue("$id", comic.id) |> ignore
-        cmd.ExecuteNonQuery()
+        cmd.ExecuteNonQuery() |> ignore
         ()
+
+module RSS =
+    let comicsToRSS comics =
+        printfn "%A" comics
 
 module main =
     open QCFetcher
@@ -153,6 +157,9 @@ module main =
         | Some comicLinks ->
             extractComics comicLinks
             |> Seq.iter (fun comic -> DB.upsertComic conn comic)
+
+            DB.getComics conn
+                |> RSS.comicsToRSS
             0
         | None -> 
             printfn "None"
