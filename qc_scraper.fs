@@ -65,6 +65,27 @@ module QCFetcher =
         | null -> None
         | _ -> Some nodes.[0].InnerHtml
 
+    let extractComics comicLinks =
+        comicLinks
+        |> Seq.take 3
+        |> Seq.map (fun comicLink ->
+            let id = extractID comicLink.text
+
+            match id with
+            | None -> None
+            | Some id ->
+                let body = fetchBody id
+                match body with
+                | None -> None
+                | Some body ->
+                    let link = makeComicLink id
+                    Some {Comic.id=id; title=comicLink.text; body=body; link=link}
+        )
+        (*
+        |> Seq.map (fun comicLink -> comicLink.)
+        |> Seq.map (fun h -> extractID h)
+        *)
+        |> Seq.choose id
 
 module DB =
     open System.Data
@@ -127,29 +148,10 @@ module main =
         let conn = DB.dbConnect "blah.db"
 
         //let f = fetchArchives "http://localhost"
-        let f = fetchArchives "http://questionablecontent.net/archive.php"
-        match f with
+        let comicLinks = fetchArchives "http://questionablecontent.net/archive.php"
+        match comicLinks with
         | Some comicLinks ->
-            comicLinks
-            |> Seq.take 3
-            |> Seq.map (fun comicLink ->
-                let id = extractID comicLink.text
-
-                match id with
-                | None -> None
-                | Some id ->
-                    let body = fetchBody id
-                    match body with
-                    | None -> None
-                    | Some body ->
-                        let link = makeComicLink id
-                        Some {Comic.id=id; title=comicLink.text; body=body; link=link}
-            )
-            (*
-            |> Seq.map (fun comicLink -> comicLink.)
-            |> Seq.map (fun h -> extractID h)
-            *)
-            |> Seq.choose id
+            extractComics comicLinks
             |> Seq.iter (fun comic -> DB.upsertComic conn comic)
             0
         | None -> 
