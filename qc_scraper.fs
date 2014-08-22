@@ -106,13 +106,14 @@ module DB =
         let reader = cmd.ExecuteReader()
         reader
 
-    let upsertComic conn id title body =
-        let sql = sprintf "insert or replace into comics (title, body, id) values ($title, $body $id)"
+    let upsertComic conn comic =
+        let sql = sprintf "insert or replace into comics (title, body, id) values ($title, $body, $id)"
         let cmd = new SqliteCommand(sql, conn)
-        cmd.Parameters.AddWithValue("$title", title) |> ignore
-        cmd.Parameters.AddWithValue("$body", body) |> ignore
-        cmd.Parameters.AddWithValue("$id", id) |> ignore
+        cmd.Parameters.AddWithValue("$title", comic.title) |> ignore
+        cmd.Parameters.AddWithValue("$body", comic.body) |> ignore
+        cmd.Parameters.AddWithValue("$id", comic.id) |> ignore
         cmd.ExecuteNonQuery()
+        ()
 
 module main =
     open QCFetcher
@@ -149,7 +150,7 @@ module main =
             |> Seq.map (fun h -> extractID h)
             *)
             |> Seq.choose id
-            |> Seq.iter (fun comic -> printfn "%A" comic)
+            |> Seq.iter (fun comic -> DB.upsertComic conn comic)
             0
         | None -> 
             printfn "None"
