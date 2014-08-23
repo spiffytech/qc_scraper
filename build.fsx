@@ -16,6 +16,7 @@ Target "Default" (fun _ ->
     let references = [
         "tools/HtmlAgilityPack/lib/Net45/HtmlAgilityPack.dll";
         "/usr/local/lib/mono/4.5/Mono.Data.Sqlite.dll";
+        "/usr/local/lib/mono/4.5/System.ServiceModel.dll";
     ]
 
     ["qc_scraper.fs"]
