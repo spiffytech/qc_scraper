@@ -9,6 +9,13 @@ let makeComicLink id =
     sprintf "http://questionablecontent.net/view.php?comic=%d" id
 
 [<AutoOpen>]
+module GenericUtils =
+    let bindOption switchFunction twoTrackInput =
+        match twoTrackInput with
+        | Some s -> switchFunction s
+        | None -> None
+
+[<AutoOpen>]
 module DomainTypes =
     type Comic = {id:int; title:string; body:string; link:string}
     type ComicLink = {text:string; link:string}
@@ -69,17 +76,14 @@ module QCFetcher =
         comicLinks
         |> Seq.take 3
         |> Seq.map (fun comicLink ->
-            let id = extractID comicLink.text
-
-            match id with
-            | None -> None
-            | Some id ->
-                let body = fetchBody id
-                match body with
-                | None -> None
-                | Some body ->
+            extractID comicLink.text
+            |> bindOption (fun id ->
+                fetchBody id
+                |> bindOption (fun body ->
                     let link = makeComicLink id
                     Some {Comic.id=id; title=comicLink.text; body=body; link=link}
+                )
+            )
         )
         (*
         |> Seq.map (fun comicLink -> comicLink.)
