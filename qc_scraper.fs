@@ -19,8 +19,23 @@ let makeComicLink id =
 module DomainTypes =
     type Comic = {id:int; title:string; body:string; link:string}
 
+module LoggerConfig =
+    open NLog
+    open NLog.Config
+    open NLog.Targets
+
+    let setLogLevel level =
+        let config = new LoggingConfiguration()
+        let consoleTarget = new ColoredConsoleTarget()
+        config.AddTarget("console", consoleTarget)
+        let rule = new LoggingRule("*", level, consoleTarget)
+        config.LoggingRules.Add rule
+        LogManager.Configuration <- config
+
 module QCFetcher =
     open System.Text.RegularExpressions
+    open NLog
+    let logger = LogManager.GetLogger("QCFetcher")
 
     let archiveURL = "http://questionablecontent.net/archive.php"
 
@@ -54,7 +69,7 @@ module QCFetcher =
         let match_ = Regex.Match(str, pattern)        
         match match_.Success with
         | false ->
-            printfn "Could not extract comic ID: %s" str
+            logger.Warn(sprintf "Could not extract comic ID: %s" str)
             None
         | true ->
             match_.Groups.["id"].Value
@@ -62,13 +77,16 @@ module QCFetcher =
             |> Some
 
     let fetchBody id =
+        logger.Info(sprintf "Fetching body for #%d" id)
         let comicURL = makeComicLink id
         let web = new HtmlWeb()
         let page = web.Load(comicURL)
         //printfn "%s" page.DocumentNode.OuterHtml
         let nodes = page.DocumentNode.SelectNodes(@"//div[@id=""news""]")
         match nodes with
-        | null -> None
+        | null ->
+            logger.Warn(sprintf "Could not retrieve body for#%d" id)
+            None
         | _ -> Some nodes.[0].InnerHtml
 
 module DB =
@@ -182,6 +200,9 @@ module RSS =
 
 module main =
     open QCFetcher
+    open NLog
+    LoggerConfig.setLogLevel LogLevel.Debug
+    let logger = LogManager.GetLogger("main")
 
     let printComics conn =
         let comics = DB.getComics conn
@@ -206,12 +227,12 @@ module main =
                 | None -> None
             )
             |> (fun l ->
-                printfn "Filtering %d comics" @@ Seq.length l
+                logger.Debug(sprintf "Filtering %d comics" @@ Seq.length l)
                 l
             )
             |> Seq.filter (fun (comicID, comicTitle) -> not @@ DB.doesComicExist conn comicID)
             |> (fun l ->
-                printfn "Retrieving %d new comics" @@ Seq.length l
+                logger.Debug(sprintf "Retrieving %d new comics" @@ Seq.length l)
                 l
             )
             |> Seq.map (fun (comicID, comicTitle) ->
@@ -229,5 +250,6 @@ module main =
                 |> RSS.stringOfFeed outFile
             0
         | None -> 
+            logger.Error("Could not retrieve comic titles!")
             printfn "None"
             255

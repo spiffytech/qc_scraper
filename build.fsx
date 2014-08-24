@@ -17,13 +17,14 @@ Target "Default" (fun _ ->
         "tools/HtmlAgilityPack/lib/Net45/HtmlAgilityPack.dll";
         "/usr/local/lib/mono/4.5/Mono.Data.Sqlite.dll";
         "/usr/local/lib/mono/4.5/System.ServiceModel.dll";
+        "tools/NLog/lib/net45/NLog.dll";
     ]
 
     ["qc_scraper.fs"]
     |> Fsc (fun parameters ->
         {parameters with 
             References = references;
-            OtherParams=["--optimize+"; "--debug:full"];
+            OtherParams=["--optimize+"; "--debug:full"; "--checked+"; "--standalone"];
             Platform=X64
             Output="main.exe"
         }
