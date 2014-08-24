@@ -246,6 +246,7 @@ module main =
             |> Seq.iter (fun comic -> DB.upsertComic conn comic)
 
             DB.getComics conn
+                |> Seq.take 15
                 |> RSS.ofComics
                 |> RSS.stringOfFeed outFile
             0
