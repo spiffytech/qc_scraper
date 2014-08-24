@@ -18,7 +18,6 @@ let makeComicLink id =
 [<AutoOpen>]
 module DomainTypes =
     type Comic = {id:int; title:string; body:string; link:string}
-    type ComicLink = {text:string; link:string}
 
 module QCFetcher =
     open System.Text.RegularExpressions
@@ -46,7 +45,7 @@ module QCFetcher =
                     node.Attributes
                     |> Seq.find (fun attr -> attr.Name = "href")
                     |> (fun attr -> attr.Value)
-                {ComicLink.text=node.InnerHtml; link=link}
+                node.InnerHtml
             )
             |> Some
 
@@ -71,25 +70,6 @@ module QCFetcher =
         match nodes with
         | null -> None
         | _ -> Some nodes.[0].InnerHtml
-
-    let extractComics comicLinks =
-        comicLinks
-        |> Seq.take 3
-        |> Seq.map (fun comicLink ->
-            extractID comicLink.text
-            |> bindOption (fun id ->
-                fetchBody id
-                |> bindOption (fun body ->
-                    let link = makeComicLink id
-                    Some {Comic.id=id; title=comicLink.text; body=body; link=link}
-                )
-            )
-        )
-        (*
-        |> Seq.map (fun comicLink -> comicLink.)
-        |> Seq.map (fun h -> extractID h)
-        *)
-        |> Seq.choose id
 
 module DB =
     open System.Data
@@ -131,6 +111,30 @@ module DB =
                 yield dbToComic reader
         }
 
+    let doesComicExist conn comicID =
+        let sql = "select id from comics where id=$id"
+        let cmd = new SqliteCommand(sql, conn)
+        cmd.Parameters.AddWithValue("$id", comicID) |> ignore
+        let reader = cmd.ExecuteReader()
+        seq {
+            while reader.Read() do
+                yield reader.["id"]
+        }
+        |> Seq.length > 0
+
+    let getNewComics conn comicIDs =
+        let sql = "select id from comics"
+        let cmd = new SqliteCommand(sql, conn)
+        let reader = cmd.ExecuteReader()
+        let storedIDs = seq {
+            while reader.Read() do
+                yield unbox<int> reader.["id"]
+        }
+
+        (Set.ofSeq comicIDs, Set.ofSeq storedIDs)
+            ||> Set.difference
+            |> Set.toSeq
+
     let upsertComic conn comic =
         let sql = sprintf "insert or replace into comics (title, body, id) values ($title, $body, $id)"
         let cmd = new SqliteCommand(sql, conn)
@@ -144,7 +148,7 @@ module RSS =
     open System.ServiceModel.Syndication
     open System.Xml
 
-    let rssOfComic comic =
+    let ofComic comic =
         let item = new SyndicationItem()
         let comicURL = makeComicLink comic.id
         item.Id <- comicURL
@@ -155,7 +159,7 @@ module RSS =
         item.Content <- new TextSyndicationContent(imgLink + comic.body, TextSyndicationContentKind.Html)
         item
 
-    let rssOfComics comics =
+    let ofComics comics =
         let baseURL = "http://questionablecontent.spiffyte.ch"
         let feed = new SyndicationFeed()
         feed.Id <- "http://questionablecontent.spiffyte.ch"
@@ -168,7 +172,7 @@ module RSS =
 
         feed.Links.Add @@ new SyndicationLink(new Uri(baseURL));
 
-        feed.Items <- Seq.map rssOfComic comics
+        feed.Items <- Seq.map ofComic comics
         feed
 
     let stringOfFeed (filename:string) (feed:SyndicationFeed) =
@@ -189,14 +193,39 @@ module main =
         let conn = DB.dbConnect "blah.db"
 
         //let f = fetchArchives "http://localhost"
-        let comicLinks = fetchArchives "http://questionablecontent.net/archive.php"
-        match comicLinks with
-        | Some comicLinks ->
-            extractComics comicLinks
+        let comicTitles = fetchArchives "http://questionablecontent.net/archive.php"
+        match comicTitles with
+        | Some comicTitles ->
+            comicTitles
+            |> Seq.map (fun comicTitle ->
+                (extractID comicTitle, comicTitle)
+            )
+            |> Seq.choose (fun (comicID, comicTitle) ->
+                match comicID with
+                | Some comicID -> Some (comicID,comicTitle)
+                | None -> None
+            )
+            |> (fun l ->
+                printfn "Filtering %d comics" @@ Seq.length l
+                l
+            )
+            |> Seq.filter (fun (comicID, comicTitle) -> not @@ DB.doesComicExist conn comicID)
+            |> (fun l ->
+                printfn "Retrieving %d new comics" @@ Seq.length l
+                l
+            )
+            |> Seq.map (fun (comicID, comicTitle) ->
+                fetchBody comicID
+                |> bindOption (fun comicBody ->
+                    let comicLink = makeComicLink comicID
+                    Some {Comic.id=comicID; title=comicTitle; body=comicBody; link=comicLink}
+                )
+            )
+            |> Seq.choose id
             |> Seq.iter (fun comic -> DB.upsertComic conn comic)
 
             DB.getComics conn
-                |> RSS.rssOfComics
+                |> RSS.ofComics
                 |> RSS.stringOfFeed outFile
             0
         | None -> 
