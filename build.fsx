@@ -29,7 +29,7 @@ Target "Default" (fun _ ->
             Output="main.exe"
         }
     )
-    Copy buildDir (references @ ["qc_scraper.exe"])
+    Copy buildDir (references @ ["qc_scraper.exe"; "qc_scraper.exe.mdb"])
 )
 
 Target "Test" (fun _ ->

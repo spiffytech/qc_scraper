@@ -15,9 +15,12 @@ module GenericUtils =
 let makeComicLink id =
     sprintf "http://questionablecontent.net/view.php?comic=%d" id
 
+let makeImgLink comicID =
+    sprintf "http://questionablecontent.net/comics/%d.png" comicID
+
 [<AutoOpen>]
 module DomainTypes =
-    type Comic = {id:int; title:string; body:string; link:string}
+    type Comic = {id:int; title:string; body:string; link:string; date:System.DateTime}
 
 module LoggerConfig =
     open NLog
@@ -76,12 +79,20 @@ module QCFetcher =
             |> int
             |> Some
 
+    let fetchPostDate comicID =
+        let imgLink = makeImgLink comicID
+        let req = WebRequest.Create(Uri(imgLink))
+        let resp = 
+            req.GetResponse()
+            :?> HttpWebResponse
+        logger.Debug(sprintf "Post date = %s" @@ resp.LastModified.ToString())
+        resp.LastModified
+
     let fetchBody id =
         logger.Info(sprintf "Fetching body for #%d" id)
         let comicURL = makeComicLink id
         let web = new HtmlWeb()
         let page = web.Load(comicURL)
-        //printfn "%s" page.DocumentNode.OuterHtml
         let nodes = page.DocumentNode.SelectNodes(@"//div[@id=""news""]")
         match nodes with
         | null ->
@@ -92,13 +103,17 @@ module QCFetcher =
 module DB =
     open System.Data
     open Mono.Data.Sqlite
+    open NLog
+    let logger = LogManager.GetLogger("QCFetcher")
 
     let dbToComic (row:SqliteDataReader) =
         {
             Comic.id = unbox<int> row.["id"];
             title = unbox row.["title"];
             body = unbox row.["body"];
-            link = makeComicLink @@ unbox<int> row.["id"]
+            link = makeComicLink @@ unbox<int> row.["id"];
+            //date = System.DateTime.Parse @@ unbox<string> row.["date"];
+            date = System.DateTime.Now;
         }
 
     let migrateDB conn =
@@ -121,7 +136,7 @@ module DB =
         conn
 
     let getComics conn =
-        let sql = "select * from comics"
+        let sql = "select * from comics order by id desc"
         let cmd = new SqliteCommand(sql, conn)
         let reader = cmd.ExecuteReader()
         seq {
@@ -154,10 +169,12 @@ module DB =
             |> Set.toSeq
 
     let upsertComic conn comic =
-        let sql = sprintf "insert or replace into comics (title, body, id) values ($title, $body, $id)"
+        logger.Debug(sprintf "Upserting comic %A" comic)
+        let sql = sprintf "insert or replace into comics (title, body, date, id) values ($title, $body, $date, $id)"
         let cmd = new SqliteCommand(sql, conn)
         cmd.Parameters.AddWithValue("$title", comic.title) |> ignore
         cmd.Parameters.AddWithValue("$body", comic.body) |> ignore
+        cmd.Parameters.AddWithValue("$date", comic.date) |> ignore
         cmd.Parameters.AddWithValue("$id", comic.id) |> ignore
         cmd.ExecuteNonQuery() |> ignore
         ()
@@ -172,8 +189,9 @@ module RSS =
         item.Id <- comicURL
         item.Links.Add @@ new SyndicationLink(new Uri(comicURL))
         item.Title <- TextSyndicationContent comic.title
+        item.LastUpdatedTime <- DateTimeOffset comic.date
 
-        let imgLink = sprintf "<img src='http://questionablecontent.net/comics/%d.png' />" comic.id
+        let imgLink = sprintf "<img src='%s' />" @@ makeImgLink comic.id
         item.Content <- new TextSyndicationContent(imgLink + comic.body, TextSyndicationContentKind.Html)
         item
 
@@ -187,8 +205,6 @@ module RSS =
         feed.Generator <- "Script by spiffytech"
 
         feed.Links.Add @@ new SyndicationLink(new Uri(baseURL + "/feed.xml"));
-
-        feed.Links.Add @@ new SyndicationLink(new Uri(baseURL));
 
         feed.Items <- Seq.map ofComic comics
         feed
@@ -213,6 +229,7 @@ module main =
         let outFile = "feed.xml"
         let conn = DB.dbConnect "blah.db"
 
+        (*
         //let f = fetchArchives "http://localhost"
         let comicTitles = fetchArchives "http://questionablecontent.net/archive.php"
         match comicTitles with
@@ -239,7 +256,8 @@ module main =
                 fetchBody comicID
                 |> bindOption (fun comicBody ->
                     let comicLink = makeComicLink comicID
-                    Some {Comic.id=comicID; title=comicTitle; body=comicBody; link=comicLink}
+                    let postDate = fetchPostDate comicID
+                    Some {Comic.id=comicID; title=comicTitle; body=comicBody; link=comicLink; date=postDate}
                 )
             )
             |> Seq.choose id
@@ -249,8 +267,17 @@ module main =
                 |> Seq.take 15
                 |> RSS.ofComics
                 |> RSS.stringOfFeed outFile
-            0
+                *)
+        DB.getComics conn
+            |> Seq.iter (fun comic ->
+                logger.Debug(sprintf "Processing comic #%d" comic.id)
+                {comic with date=fetchPostDate comic.id}
+                |> DB.upsertComic conn
+            )
+        0
+            (*
         | None -> 
             logger.Error("Could not retrieve comic titles!")
             printfn "None"
             255
+            *)
