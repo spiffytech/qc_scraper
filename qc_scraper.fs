@@ -80,13 +80,23 @@ module QCFetcher =
             |> Some
 
     let fetchPostDate comicID =
-        let imgLink = makeImgLink comicID
-        let req = WebRequest.Create(Uri(imgLink))
-        let resp = 
-            req.GetResponse()
-            :?> HttpWebResponse
-        logger.Debug(sprintf "Post date = %s" @@ resp.LastModified.ToString())
-        resp.LastModified
+        async {
+            let imgLink = makeImgLink comicID
+            let req = WebRequest.Create(Uri(imgLink))
+            req.Method <- "HEAD"
+
+            try
+                let! resp = req.AsyncGetResponse()
+                let resp' =
+                    resp
+                    :?> HttpWebResponse
+                logger.Debug(sprintf "#%d post date = %s" comicID @@ resp'.LastModified.ToString())
+                return Some resp'.LastModified
+            with  // 404, etc.
+                | ex ->
+                    logger.Warn(sprintf "Exception fetching #%d" comicID)
+                    return None
+        }
 
     let fetchBody id =
         logger.Info(sprintf "Fetching body for #%d" id)
@@ -117,7 +127,7 @@ module DB =
         }
 
     let migrateDB conn =
-        let cmd = new SqliteCommand("create table comics (id int primary key, title text, body text)", conn)
+        let cmd = new SqliteCommand("create table comics (id int primary key, title text, body text, date text)", conn)
         cmd.ExecuteNonQuery()
             |> ignore
         ()
@@ -169,7 +179,7 @@ module DB =
             |> Set.toSeq
 
     let upsertComic conn comic =
-        logger.Debug(sprintf "Upserting comic %A" comic)
+        logger.Debug(sprintf "Upserting comic %d" comic.id)
         let sql = sprintf "insert or replace into comics (title, body, date, id) values ($title, $body, $date, $id)"
         let cmd = new SqliteCommand(sql, conn)
         cmd.Parameters.AddWithValue("$title", comic.title) |> ignore
@@ -269,11 +279,25 @@ module main =
                 |> RSS.stringOfFeed outFile
                 *)
         DB.getComics conn
-            |> Seq.iter (fun comic ->
-                logger.Debug(sprintf "Processing comic #%d" comic.id)
-                {comic with date=fetchPostDate comic.id}
-                |> DB.upsertComic conn
+            |> Seq.filter (fun comic -> comic.id > 1710 && comic.id < 1725)
+            |> Seq.cache
+            |> (fun comics ->
+                let postDates =
+                    Seq.map (fun comic -> fetchPostDate comic.id) comics
+                    |> Async.Parallel
+                    |> Async.RunSynchronously
+
+                Seq.zip comics postDates
             )
+            |> Seq.choose (fun (comic,postDate) ->
+                match postDate with
+                | Some postDate -> Some (comic,postDate)
+                | None -> None
+            )
+            |> Seq.map (fun (comic,postDate) ->
+                {comic with date=postDate}
+            )
+            |> Seq.iter (fun comic -> DB.upsertComic conn comic)
         0
             (*
         | None -> 
