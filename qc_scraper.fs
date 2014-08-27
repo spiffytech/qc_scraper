@@ -15,12 +15,21 @@ module GenericUtils =
 let makeComicLink id =
     sprintf "http://questionablecontent.net/view.php?comic=%d" id
 
-let makeImgLink comicID =
-    sprintf "http://questionablecontent.net/comics/%d.png" comicID
+let makeImgLink comicID ext =
+    sprintf "http://questionablecontent.net/comics/%d.%s" comicID ext
+
+let chooseTuple tupleSeq fn =
+    let chooser t =
+        let v = fn t
+        match v with
+        | Some v -> Some t
+        | None -> None
+
+    Seq.choose chooser tupleSeq
 
 [<AutoOpen>]
 module DomainTypes =
-    type Comic = {id:int; title:string; body:string; link:string; date:System.DateTime}
+    type Comic = {id:int; title:string; body:string; link:string; date:System.DateTime; imgtype:String}
 
 module LoggerConfig =
     open NLog
@@ -41,13 +50,6 @@ module QCFetcher =
     let logger = LogManager.GetLogger("QCFetcher")
 
     let archiveURL = "http://questionablecontent.net/archive.php"
-
-    (*
-    let fetchURL url =
-        let req = WebRequest.Create(Uri(url))
-        let resp = req.GetResponse().GetResponseStream()
-        IO.StreamReader(resp).ReadToEnd()
-        *)
 
     let fetchArchives url =
         let web = new HtmlWeb()
@@ -79,9 +81,9 @@ module QCFetcher =
             |> int
             |> Some
 
-    let fetchPostDate comicID =
+    let fetchPostDate comicID ext =
         async {
-            let imgLink = makeImgLink comicID
+            let imgLink = makeImgLink comicID ext
             let req = WebRequest.Create(Uri(imgLink))
             req.Method <- "HEAD"
 
@@ -103,12 +105,31 @@ module QCFetcher =
         let comicURL = makeComicLink id
         let web = new HtmlWeb()
         let page = web.Load(comicURL)
-        let nodes = page.DocumentNode.SelectNodes(@"//div[@id=""news""]")
-        match nodes with
-        | null ->
-            logger.Warn(sprintf "Could not retrieve body for#%d" id)
-            None
-        | _ -> Some nodes.[0].InnerHtml
+        let bodyNode = page.DocumentNode.SelectSingleNode(@"//div[@id=""news""]")
+        let body =
+            match bodyNode with
+            | null ->
+                logger.Warn(sprintf "Could not retrieve body for#%d" id)
+                None
+            | _ -> Some bodyNode.InnerHtml
+
+        let imgNode = page.DocumentNode.SelectSingleNode(@"//img[@id=""strip""]")
+        let ext =
+            match imgNode with
+            | null ->
+                logger.Warn(sprintf "Could not retrieve image link for#%d" id)
+                None
+            | _ ->
+                imgNode.Attributes
+                |> Seq.find (fun attr -> attr.Name = "src")
+                |> (fun attr -> attr.Value)
+                |> (fun str -> str.Substring(str.Length - 3))
+                |> Some
+
+        match (body, ext) with
+        | (_, None) -> None
+        | (None, _) -> None
+        | (Some body, Some ext) -> Some (body, ext)
 
 module DB =
     open System.Data
@@ -124,10 +145,12 @@ module DB =
             link = makeComicLink @@ unbox<int> row.["id"];
             //date = System.DateTime.Parse @@ unbox<string> row.["date"];
             date = System.DateTime.Now;
+            //imgtype = unbox row.["imgtype"]
+            imgtype = ""
         }
 
     let migrateDB conn =
-        let cmd = new SqliteCommand("create table comics (id int primary key, title text, body text, date text)", conn)
+        let cmd = new SqliteCommand("create table comics (id int primary key, title text, body text, date text, imgtype text)", conn)
         cmd.ExecuteNonQuery()
             |> ignore
         ()
@@ -153,6 +176,7 @@ module DB =
             while reader.Read() do
                 yield dbToComic reader
         }
+        |> Seq.cache
 
     let doesComicExist conn comicID =
         let sql = "select id from comics where id=$id"
@@ -180,12 +204,13 @@ module DB =
 
     let upsertComic conn comic =
         logger.Debug(sprintf "Upserting comic %d" comic.id)
-        let sql = sprintf "insert or replace into comics (title, body, date, id) values ($title, $body, $date, $id)"
+        let sql = sprintf "insert or replace into comics (title, body, date, id, imgtype) values ($title, $body, $date, $id, $imgtype)"
         let cmd = new SqliteCommand(sql, conn)
         cmd.Parameters.AddWithValue("$title", comic.title) |> ignore
         cmd.Parameters.AddWithValue("$body", comic.body) |> ignore
         cmd.Parameters.AddWithValue("$date", comic.date) |> ignore
         cmd.Parameters.AddWithValue("$id", comic.id) |> ignore
+        cmd.Parameters.AddWithValue("$imgtype", comic.imgtype) |> ignore
         cmd.ExecuteNonQuery() |> ignore
         ()
 
@@ -201,7 +226,7 @@ module RSS =
         item.Title <- TextSyndicationContent comic.title
         item.LastUpdatedTime <- DateTimeOffset comic.date
 
-        let imgLink = sprintf "<img src='%s' />" @@ makeImgLink comic.id
+        let imgLink = sprintf "<img src='%s' />" @@ makeImgLink comic.id comic.imgtype
         item.Content <- new TextSyndicationContent(imgLink + comic.body, TextSyndicationContentKind.Html)
         item
 
@@ -264,10 +289,11 @@ module main =
             )
             |> Seq.map (fun (comicID, comicTitle) ->
                 fetchBody comicID
-                |> bindOption (fun comicBody ->
-                    let comicLink = makeComicLink comicID
-                    let postDate = fetchPostDate comicID
-                    Some {Comic.id=comicID; title=comicTitle; body=comicBody; link=comicLink; date=postDate}
+                |> bindOption (fun (comicBody,ext) ->
+                    let postDate = fetchPostDate comicID ext
+                    |> bindOption (fun postdate ->
+                        Some {Comic.id=comicID; title=comicTitle; body=comicBody; link=comicLink; date=postDate, imgtype=ext}
+                    )
                 )
             )
             |> Seq.choose id
@@ -279,22 +305,24 @@ module main =
                 |> RSS.stringOfFeed outFile
                 *)
         DB.getComics conn
-            |> Seq.filter (fun comic -> comic.id > 1710 && comic.id < 1725)
-            |> Seq.cache
+            //|> Seq.filter (fun comic -> comic.id > 1710 && comic.id < 1725)
             |> (fun comics ->
-                let postDates =
-                    Seq.map (fun comic -> fetchPostDate comic.id) comics
-                    |> Async.Parallel
-                    |> Async.RunSynchronously
-
-                Seq.zip comics postDates
+                Seq.map (fun comic ->
+                    fetchBody comic.id
+                    //|> Async.RunSynchronously
+                    |> bindOption (fun (body,ext) ->
+                        fetchPostDate comic.id ext
+                        |> Async.RunSynchronously
+                        |> bindOption (fun postDate ->
+                            Some (comic,body,ext,postDate)
+                        )
+                    )
+                ) comics
+                //|> Async.Parallel
+                //|> Async.RunSynchronously
             )
-            |> Seq.choose (fun (comic,postDate) ->
-                match postDate with
-                | Some postDate -> Some (comic,postDate)
-                | None -> None
-            )
-            |> Seq.map (fun (comic,postDate) ->
+            |> Seq.choose id
+            |> Seq.map (fun (comic,body,ext,postDate) ->
                 {comic with date=postDate}
             )
             |> Seq.iter (fun comic -> DB.upsertComic conn comic)
