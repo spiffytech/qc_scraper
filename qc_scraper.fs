@@ -103,8 +103,13 @@ module QCFetcher =
     let fetchBody id =
         logger.Info(sprintf "Fetching body for #%d" id)
         let comicURL = makeComicLink id
-        let web = new HtmlWeb()
-        let page = web.Load(comicURL)
+        let req = WebRequest.Create(Uri(comicURL))
+        let resp = req.GetResponse()
+        let page = HtmlDocument()
+        let html =
+            use reader = new StreamReader(resp.GetResponseStream())
+            reader.ReadToEnd()
+        page.LoadHtml(html)
         let bodyNode = page.DocumentNode.SelectSingleNode(@"//div[@id=""news""]")
         let body =
             match bodyNode with
