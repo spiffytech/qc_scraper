@@ -314,15 +314,19 @@ module main =
                 |> RSS.stringOfFeed outFile
                 *)
         DB.getComics conn
-        //|> Seq.filter (fun comic -> comic.id > 1710 && comic.id < 1725)
-        |> (fun comics ->
-            comics
-            |> Seq.map (fun comic -> fetchBodyExtAsync comic.id)
-            |> Async.Parallel
-            |> Async.RunSynchronously
-            |> Seq.choose id
-            |> Seq.map2 (fun comic (body,ext) -> (comic,body,ext)) comics
+        |> Seq.filter (fun comic -> comic.id > 1710 && comic.id < 1725)
+        |> Seq.map (fun comic ->
+            async {
+                let! properties = fetchBodyExtAsync comic.id
+                return
+                    match properties with
+                    | Some (body,ext) -> Some (comic,body,ext)
+                    | None -> None
+            }
         )
+        |> Async.Parallel
+        |> Async.RunSynchronously
+        |> Seq.choose id
         |> (fun comics ->
             comics
             |> Seq.map (fun (comic,body,ext) ->
