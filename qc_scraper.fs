@@ -80,7 +80,7 @@ module QCFetcher =
             |> int
             |> Some
 
-    let fetchPostDate comicID ext =
+    let fetchPostDateAsync comicID ext =
         async {
             let imgLink = makeImgLink comicID ext
             let req = WebRequest.Create(Uri(imgLink))
@@ -99,7 +99,7 @@ module QCFetcher =
                     return None
         }
 
-    let fetchBody id =
+    let fetchBodyExtAsync id =
         async {
             logger.Info(sprintf "Fetching body for #%d" id)
             let comicURL = makeComicLink id
@@ -296,10 +296,10 @@ module main =
                 l
             )
             |> Seq.map (fun (comicID, comicTitle) ->
-                fetchBody comicID
+                fetchBodyExtAsync comicID
                 |> Async.RunSynchronously
                 |> bindOption (fun (comicBody,ext) ->
-                    let postDate = fetchPostDate comicID ext
+                    let postDate = fetchPostDateAsync comicID ext
                     |> bindOption (fun postdate ->
                         Some {Comic.id=comicID; title=comicTitle; body=comicBody; link=comicLink; date=postDate, imgtype=ext}
                     )
@@ -317,7 +317,7 @@ module main =
         //|> Seq.filter (fun comic -> comic.id > 1710 && comic.id < 1725)
         |> (fun comics ->
             comics
-            |> Seq.map (fun comic -> fetchBody comic.id)
+            |> Seq.map (fun comic -> fetchBodyExtAsync comic.id)
             |> Async.Parallel
             |> Async.RunSynchronously
             |> Seq.choose id
@@ -327,7 +327,7 @@ module main =
             comics
             |> Seq.map (fun (comic,body,ext) ->
                 async {
-                    let! postDate = fetchPostDate comic.id ext
+                    let! postDate = fetchPostDateAsync comic.id ext
                     let ret =
                         match postDate with
                         | Some postDate -> Some (comic,body,ext,postDate)
