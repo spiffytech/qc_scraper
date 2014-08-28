@@ -18,14 +18,13 @@ let makeComicLink id =
 let makeImgLink comicID ext =
     sprintf "http://questionablecontent.net/comics/%d.%s" comicID ext
 
-let chooseTuple tupleSeq fn =
-    let chooser t =
+let tupleChooser fn =
+    (fun t ->
         let v = fn t
         match v with
         | Some v -> Some t
         | None -> None
-
-    Seq.choose chooser tupleSeq
+    )
 
 [<AutoOpen>]
 module DomainTypes =
@@ -101,40 +100,44 @@ module QCFetcher =
         }
 
     let fetchBody id =
-        logger.Info(sprintf "Fetching body for #%d" id)
-        let comicURL = makeComicLink id
-        let req = WebRequest.Create(Uri(comicURL))
-        let resp = req.GetResponse()
-        let page = HtmlDocument()
-        let html =
-            use reader = new StreamReader(resp.GetResponseStream())
-            reader.ReadToEnd()
-        page.LoadHtml(html)
-        let bodyNode = page.DocumentNode.SelectSingleNode(@"//div[@id=""news""]")
-        let body =
-            match bodyNode with
-            | null ->
-                logger.Warn(sprintf "Could not retrieve body for#%d" id)
-                None
-            | _ -> Some bodyNode.InnerHtml
+        async {
+            logger.Info(sprintf "Fetching body for #%d" id)
+            let comicURL = makeComicLink id
+            let req = WebRequest.Create(Uri(comicURL))
+            let! resp = req.AsyncGetResponse()
+            let page = HtmlDocument()
+            let html =
+                use reader = new StreamReader(resp.GetResponseStream())
+                reader.ReadToEnd()
+            page.LoadHtml(html)
+            let bodyNode = page.DocumentNode.SelectSingleNode(@"//div[@id=""news""]")
+            let body =
+                match bodyNode with
+                | null ->
+                    logger.Warn(sprintf "Could not retrieve body for#%d" id)
+                    None
+                | _ -> Some bodyNode.InnerHtml
 
-        let imgNode = page.DocumentNode.SelectSingleNode(@"//img[@id=""strip""]")
-        let ext =
-            match imgNode with
-            | null ->
-                logger.Warn(sprintf "Could not retrieve image link for#%d" id)
-                None
-            | _ ->
-                imgNode.Attributes
-                |> Seq.find (fun attr -> attr.Name = "src")
-                |> (fun attr -> attr.Value)
-                |> (fun str -> str.Substring(str.Length - 3))
-                |> Some
+            let imgNode = page.DocumentNode.SelectSingleNode(@"//img[@id=""strip""]")
+            let ext =
+                match imgNode with
+                | null ->
+                    logger.Warn(sprintf "Could not retrieve image link for#%d" id)
+                    None
+                | _ ->
+                    imgNode.Attributes
+                    |> Seq.find (fun attr -> attr.Name = "src")
+                    |> (fun attr -> attr.Value)
+                    |> (fun str -> str.Substring(str.Length - 3))
+                    |> Some
 
-        match (body, ext) with
-        | (_, None) -> None
-        | (None, _) -> None
-        | (Some body, Some ext) -> Some (body, ext)
+            let ret =
+                match (body, ext) with
+                | (_, None) -> None
+                | (None, _) -> None
+                | (Some body, Some ext) -> Some (body, ext)
+            return ret
+        }
 
 module DB =
     open System.Data
@@ -294,6 +297,7 @@ module main =
             )
             |> Seq.map (fun (comicID, comicTitle) ->
                 fetchBody comicID
+                |> Async.RunSynchronously
                 |> bindOption (fun (comicBody,ext) ->
                     let postDate = fetchPostDate comicID ext
                     |> bindOption (fun postdate ->
@@ -310,27 +314,35 @@ module main =
                 |> RSS.stringOfFeed outFile
                 *)
         DB.getComics conn
-            //|> Seq.filter (fun comic -> comic.id > 1710 && comic.id < 1725)
-            |> (fun comics ->
-                Seq.map (fun comic ->
-                    fetchBody comic.id
-                    //|> Async.RunSynchronously
-                    |> bindOption (fun (body,ext) ->
-                        fetchPostDate comic.id ext
-                        |> Async.RunSynchronously
-                        |> bindOption (fun postDate ->
-                            Some (comic,body,ext,postDate)
-                        )
-                    )
-                ) comics
-                //|> Async.Parallel
-                //|> Async.RunSynchronously
-            )
+        //|> Seq.filter (fun comic -> comic.id > 1710 && comic.id < 1725)
+        |> (fun comics ->
+            comics
+            |> Seq.map (fun comic -> fetchBody comic.id)
+            |> Async.Parallel
+            |> Async.RunSynchronously
             |> Seq.choose id
-            |> Seq.map (fun (comic,body,ext,postDate) ->
-                {comic with date=postDate}
+            |> Seq.map2 (fun comic (body,ext) -> (comic,body,ext)) comics
+        )
+        |> (fun comics ->
+            comics
+            |> Seq.map (fun (comic,body,ext) ->
+                async {
+                    let! postDate = fetchPostDate comic.id ext
+                    let ret =
+                        match postDate with
+                        | Some postDate -> Some (comic,body,ext,postDate)
+                        | None -> None
+                    return ret
+                }
             )
-            |> Seq.iter (fun comic -> DB.upsertComic conn comic)
+            |> Async.Parallel
+            |> Async.RunSynchronously
+        )
+        |> Seq.choose id
+        |> Seq.map (fun (comic,body,ext,postDate) ->
+            {comic with body=body; imgtype=ext; date=postDate}
+        )
+        |> Seq.iter (fun comic -> DB.upsertComic conn comic)
         0
             (*
         | None -> 
