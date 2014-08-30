@@ -12,6 +12,16 @@ module GenericUtils =
         | Some s -> switchFunction s
         | None -> None
 
+    let rec seqChunkedMap chunkSize fn s =
+        seq {
+            yield! fn @@ Seq.truncate chunkSize s
+            match (Seq.length s) with
+            | x when x <= chunkSize -> yield! Seq.empty
+            | x ->
+                let skippedSeq = Seq.skip chunkSize s
+                yield! seqChunkedMap chunkSize fn (Seq.skip chunkSize s)
+        }
+
 let makeComicLink id =
     sprintf "http://questionablecontent.net/view.php?comic=%d" id
 
@@ -314,39 +324,43 @@ module main =
                 |> RSS.stringOfFeed outFile
                 *)
         DB.getComics conn
-        |> Seq.filter (fun comic -> comic.id > 1710 && comic.id < 1725)
-        |> Seq.map (fun comic ->
-            async {
-                let! properties = fetchBodyExtAsync comic.id
-                return
-                    match properties with
-                    | Some (body,ext) -> Some (comic,body,ext)
-                    | None -> None
-            }
-        )
-        |> Async.Parallel
-        |> Async.RunSynchronously
-        |> Seq.choose id
-        |> (fun comics ->
+        //|> Seq.filter (fun comic -> comic.id > 1710 && comic.id < 1725)
+        |> seqChunkedMap 20 (fun comics ->
             comics
-            |> Seq.map (fun (comic,body,ext) ->
+            |> Seq.map (fun comic ->
                 async {
-                    let! postDate = fetchPostDateAsync comic.id ext
-                    let ret =
-                        match postDate with
-                        | Some postDate -> Some (comic,body,ext,postDate)
+                    let! properties = fetchBodyExtAsync comic.id
+                    return
+                        match properties with
+                        | Some (body,ext) -> Some (comic,body,ext)
                         | None -> None
-                    return ret
                 }
             )
             |> Async.Parallel
             |> Async.RunSynchronously
+            |> Seq.choose id
+            |> (fun comics ->
+                comics
+                |> Seq.map (fun (comic,body,ext) ->
+                    async {
+                        let! postDate = fetchPostDateAsync comic.id ext
+                        let ret =
+                            match postDate with
+                            | Some postDate -> Some (comic,body,ext,postDate)
+                            | None -> None
+                        return ret
+                    }
+                )
+                |> Async.Parallel
+                |> Async.RunSynchronously
+            )
+            |> Seq.choose id
+            |> Seq.map (fun (comic,body,ext,postDate) ->
+                {comic with body=body; imgtype=ext; date=postDate}
+            )
+            |> Seq.map (fun comic -> DB.upsertComic conn comic)
         )
-        |> Seq.choose id
-        |> Seq.map (fun (comic,body,ext,postDate) ->
-            {comic with body=body; imgtype=ext; date=postDate}
-        )
-        |> Seq.iter (fun comic -> DB.upsertComic conn comic)
+        |> Seq.iter (fun _ -> ())
         0
             (*
         | None -> 
