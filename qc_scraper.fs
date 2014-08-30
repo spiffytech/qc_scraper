@@ -161,10 +161,8 @@ module DB =
             title = unbox row.["title"];
             body = unbox row.["body"];
             link = makeComicLink @@ unbox<int> row.["id"];
-            //date = System.DateTime.Parse @@ unbox<string> row.["date"];
-            date = System.DateTime.Now;
-            //imgtype = unbox row.["imgtype"]
-            imgtype = ""
+            date = System.DateTime.Parse @@ unbox<string> row.["date"];
+            imgtype = unbox row.["imgtype"]
         }
 
     let migrateDB conn =
@@ -324,7 +322,7 @@ module main =
                 |> RSS.stringOfFeed outFile
                 *)
         DB.getComics conn
-        //|> Seq.filter (fun comic -> comic.id > 1710 && comic.id < 1725)
+        |> Seq.filter (fun comic -> comic.id > 1710 && comic.id < 1725)
         |> seqChunkedMap 20 (fun comics ->
             comics
             |> Seq.map (fun comic ->
@@ -339,21 +337,18 @@ module main =
             |> Async.Parallel
             |> Async.RunSynchronously
             |> Seq.choose id
-            |> (fun comics ->
-                comics
-                |> Seq.map (fun (comic,body,ext) ->
-                    async {
-                        let! postDate = fetchPostDateAsync comic.id ext
-                        let ret =
-                            match postDate with
-                            | Some postDate -> Some (comic,body,ext,postDate)
-                            | None -> None
-                        return ret
-                    }
-                )
-                |> Async.Parallel
-                |> Async.RunSynchronously
+            |> Seq.map (fun (comic,body,ext) ->
+                async {
+                    let! postDate = fetchPostDateAsync comic.id ext
+                    let ret =
+                        match postDate with
+                        | Some postDate -> Some (comic,body,ext,postDate)
+                        | None -> None
+                    return ret
+                }
             )
+            |> Async.Parallel
+            |> Async.RunSynchronously
             |> Seq.choose id
             |> Seq.map (fun (comic,body,ext,postDate) ->
                 {comic with body=body; imgtype=ext; date=postDate}
