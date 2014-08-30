@@ -275,6 +275,37 @@ module main =
         let comics = DB.getComics conn
         comics
 
+    let updateComics comicIDs =
+        comicIDs
+        |> Seq.map (fun comicID ->
+            async {
+                let! properties = fetchBodyExtAsync comicID
+                return
+                    match properties with
+                    | Some (body,ext) -> Some (comicID,body,ext)
+                    | None -> None
+            }
+        )
+        |> Async.Parallel
+        |> Async.RunSynchronously
+        |> Seq.choose id
+        |> Seq.map (fun (comicID,body,ext) ->
+            async {
+                let! postDate = fetchPostDateAsync comicID ext
+                let ret =
+                    match postDate with
+                    | Some postDate -> Some (comicID,body,ext,postDate)
+                    | None -> None
+                return ret
+            }
+        )
+        |> Async.Parallel
+        |> Async.RunSynchronously
+        |> Seq.choose id
+        |> Seq.map (fun (comicID,body,ext,postDate) ->
+            {Comic.id=comicID; body=body; imgtype=ext; date=postDate; title=""; link=""}
+        )
+
     [<EntryPoint>]
     let main _ =
         let outFile = "feed.xml"
@@ -322,40 +353,13 @@ module main =
                 |> RSS.stringOfFeed outFile
                 *)
         DB.getComics conn
-        |> Seq.filter (fun comic -> comic.id > 1710 && comic.id < 1725)
+        |> Seq.map (fun comic -> comic.id)
+        |> Seq.filter (fun comicID -> comicID > 1710 && comicID < 1725)
         |> seqChunkedMap 20 (fun comics ->
-            comics
-            |> Seq.map (fun comic ->
-                async {
-                    let! properties = fetchBodyExtAsync comic.id
-                    return
-                        match properties with
-                        | Some (body,ext) -> Some (comic,body,ext)
-                        | None -> None
-                }
-            )
-            |> Async.Parallel
-            |> Async.RunSynchronously
-            |> Seq.choose id
-            |> Seq.map (fun (comic,body,ext) ->
-                async {
-                    let! postDate = fetchPostDateAsync comic.id ext
-                    let ret =
-                        match postDate with
-                        | Some postDate -> Some (comic,body,ext,postDate)
-                        | None -> None
-                    return ret
-                }
-            )
-            |> Async.Parallel
-            |> Async.RunSynchronously
-            |> Seq.choose id
-            |> Seq.map (fun (comic,body,ext,postDate) ->
-                {comic with body=body; imgtype=ext; date=postDate}
-            )
+            updateComics comics
             |> Seq.map (fun comic -> DB.upsertComic conn comic)
         )
-        |> Seq.iter (fun _ -> ())
+        |> Seq.iter (fun _ -> ())  // Consume the returned array, so it actually gets executed
         0
             (*
         | None -> 
