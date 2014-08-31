@@ -256,9 +256,9 @@ module RSS =
         let feed = new SyndicationFeed()
         feed.Id <- "http://questionablecontent.spiffyte.ch"
         feed.Title <- TextSyndicationContent "Questionable Content (unofficial)"
-        feed.Description <- TextSyndicationContent "Unofficial (and reliable!) Questionable Content RSS feed"
+        feed.Description <- TextSyndicationContent "Unofficial (but reliable!) Questionable Content RSS feed"
         feed.LastUpdatedTime <- new DateTimeOffset(DateTime.Now);
-        feed.Generator <- "Script by spiffytech"
+        feed.Generator <- "Script by spiffytech - https://github.com/spiffytech/qc_scraper"
 
         feed.Links.Add @@ new SyndicationLink(new Uri(baseURL + "/feed.xml"));
 
