@@ -29,10 +29,10 @@ let makeImgLink comicID ext =
     sprintf "http://questionablecontent.net/comics/%d.%s" comicID ext
 
 let tupleChooser fn =
-    (fun t ->
-        let v = fn t
-        match v with
-        | Some v -> Some t
+    (fun tuple ->
+        let value = fn tuple
+        match value with
+        | Some value -> Some tuple
         | None -> None
     )
 
@@ -63,10 +63,13 @@ module QCFetcher =
     let fetchArchives url =
         let web = new HtmlWeb()
         let page = web.Load(url)
+        logger.Debug("Archives fetched")
         //printfn "%s" page.DocumentNode.OuterHtml
         let nodes = page.DocumentNode.SelectNodes(@"//div[@id=""archive""]/a")
         match nodes with
-        | null -> None
+        | null ->
+            logger.Fatal("Could not parse archives")
+            None
         | _ ->
             nodes
             |> Seq.map (fun node ->
@@ -76,6 +79,7 @@ module QCFetcher =
                     |> (fun attr -> attr.Value)
                 node.InnerHtml
             )
+            |> Seq.cache
             |> Some
 
     let extractID str =
@@ -233,6 +237,8 @@ module DB =
 module RSS =
     open System.ServiceModel.Syndication
     open System.Xml
+    open NLog
+    let logger = LogManager.GetLogger("main")
 
     let ofComic comic =
         let item = new SyndicationItem()
@@ -264,6 +270,7 @@ module RSS =
         let xmlWriter = XmlWriter.Create filename
         feed.SaveAsRss20 xmlWriter
         xmlWriter.Close()
+        logger.Info("RSS file written")
 
 module main =
     open QCFetcher
@@ -302,68 +309,51 @@ module main =
         |> Async.Parallel
         |> Async.RunSynchronously
         |> Seq.choose id
-        |> Seq.map (fun (comicID,body,ext,postDate) ->
-            {Comic.id=comicID; body=body; imgtype=ext; date=postDate; title=""; link=""}
-        )
 
     [<EntryPoint>]
     let main _ =
         let outFile = "feed.xml"
         let conn = DB.dbConnect "blah.db"
 
-        (*
-        //let f = fetchArchives "http://localhost"
-        let comicTitles = fetchArchives "http://questionablecontent.net/archive.php"
-        match comicTitles with
-        | Some comicTitles ->
-            comicTitles
-            |> Seq.map (fun comicTitle ->
-                (extractID comicTitle, comicTitle)
-            )
-            |> Seq.choose (fun (comicID, comicTitle) ->
-                match comicID with
-                | Some comicID -> Some (comicID,comicTitle)
-                | None -> None
-            )
-            |> (fun l ->
-                logger.Debug(sprintf "Filtering %d comics" @@ Seq.length l)
-                l
-            )
-            |> Seq.filter (fun (comicID, comicTitle) -> not @@ DB.doesComicExist conn comicID)
-            |> (fun l ->
-                logger.Debug(sprintf "Retrieving %d new comics" @@ Seq.length l)
-                l
-            )
-            |> Seq.map (fun (comicID, comicTitle) ->
-                fetchBodyExtAsync comicID
-                |> Async.RunSynchronously
-                |> bindOption (fun (comicBody,ext) ->
-                    let postDate = fetchPostDateAsync comicID ext
-                    |> bindOption (fun postdate ->
-                        Some {Comic.id=comicID; title=comicTitle; body=comicBody; link=comicLink; date=postDate, imgtype=ext}
-                    )
+        fetchArchives "http://questionablecontent.net/archive.php"
+        |> bindOption (fun comicTitles ->
+            let newComics =
+                comicTitles
+                |> Seq.map (fun comicTitle ->
+                    let comicID = extractID comicTitle
+                    // Using this instead of tupleChooser because it extracts the comicID value for us
+                    match comicID with
+                    | None -> None
+                    | Some comicID -> Some (comicID,comicTitle)
                 )
+                |> Seq.choose id
+                |> Seq.filter (fun (comicID,_) -> comicID > 1710 && comicID < 1725)
+                //|> Seq.filter (fun (comicID, comicTitle) -> not @@ DB.doesComicExist conn comicID)
+
+            let updatedComics =
+                newComics
+                |> Seq.map (fun (id,_) -> id)
+                |> seqChunkedMap 20 updateComics
+
+            let hash = Map.ofSeq newComics
+            updatedComics
+            |> Seq.map (fun (comicID,body,ext,postDate) ->
+                let title = hash.Item comicID
+                {Comic.id=comicID; body=body; imgtype=ext; date=postDate; title=title; link=makeComicLink comicID}
             )
-            |> Seq.choose id
             |> Seq.iter (fun comic -> DB.upsertComic conn comic)
 
             DB.getComics conn
                 |> Seq.take 15
                 |> RSS.ofComics
                 |> RSS.stringOfFeed outFile
-                *)
-        DB.getComics conn
-        |> Seq.map (fun comic -> comic.id)
-        |> Seq.filter (fun comicID -> comicID > 1710 && comicID < 1725)
-        |> seqChunkedMap 20 (fun comics ->
-            updateComics comics
-            |> Seq.map (fun comic -> DB.upsertComic conn comic)
+
+            Some "success"
         )
-        |> Seq.iter (fun _ -> ())  // Consume the returned array, so it actually gets executed
-        0
-            (*
-        | None -> 
-            logger.Error("Could not retrieve comic titles!")
-            printfn "None"
-            255
-            *)
+        |> (fun ret ->
+            match ret with
+            | None ->
+                logger.Fatal("Could not retrieve comic titles!")
+                255
+            | Some ret -> 0
+        )
