@@ -312,8 +312,12 @@ module main =
         |> Seq.choose id
 
     [<EntryPoint>]
-    let main _ =
-        let outFile = "feed.xml"
+    let main args =
+        let outfile =
+            match args with
+            | [|x|] -> x
+            | [||]
+            | _ -> "feed.xml"
         let conn = DB.dbConnect "blah.db"
 
         fetchArchives "http://questionablecontent.net/archive.php"
@@ -363,7 +367,7 @@ module main =
                     comics
                 )
                 |> RSS.ofComics
-                |> RSS.stringOfFeed outFile
+                |> RSS.stringOfFeed outfile
 
             conn.Close()
 
