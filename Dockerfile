@@ -1,6 +1,8 @@
 FROM thaiphan/mono:3.6.0.39
 
-ADD build /build
-ADD blah.db /build/blah.db
+RUN mkdir /data
+ADD blah.db /data/blah.db
 
-CMD cd /build && mono --debug qc_scraper.exe
+ADD build /build
+
+CMD cd /data && mono --debug /build/qc_scraper.exe /data/feed.xml
