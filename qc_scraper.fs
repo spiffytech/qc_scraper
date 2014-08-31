@@ -157,7 +157,7 @@ module DB =
     open System.Data
     open Mono.Data.Sqlite
     open NLog
-    let logger = LogManager.GetLogger("QCFetcher")
+    let logger = LogManager.GetLogger("DB")
 
     let dbToComic (row:SqliteDataReader) =
         {
@@ -238,7 +238,7 @@ module RSS =
     open System.ServiceModel.Syndication
     open System.Xml
     open NLog
-    let logger = LogManager.GetLogger("main")
+    let logger = LogManager.GetLogger("RSS")
 
     let ofComic comic =
         let item = new SyndicationItem()
@@ -290,7 +290,9 @@ module main =
                 return
                     match properties with
                     | Some (body,ext) -> Some (comicID,body,ext)
-                    | None -> None
+                    | None ->
+                        logger.Warn(sprintf "Could not fetch body/image extension for #%d" comicID)
+                        None
             }
         )
         |> Async.Parallel
@@ -302,7 +304,9 @@ module main =
                 let ret =
                     match postDate with
                     | Some postDate -> Some (comicID,body,ext,postDate)
-                    | None -> None
+                    | None ->
+                        logger.Warn(sprintf "Could not fetch date for #%d" comicID)
+                        None
                 return ret
             }
         )
@@ -323,7 +327,9 @@ module main =
                     let comicID = extractID comicTitle
                     // Using this instead of tupleChooser because it extracts the comicID value for us
                     match comicID with
-                    | None -> None
+                    | None ->
+                        logger.Warn(sprintf "Could not extract ID from '%s'" comicTitle)
+                        None
                     | Some comicID -> Some (comicID,comicTitle)
                 )
                 |> Seq.choose id
