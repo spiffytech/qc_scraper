@@ -177,7 +177,7 @@ module DB =
     let dbConnect filename =
         let dbExists = File.Exists filename
 
-        let connStr = sprintf "Data Source =%s;" filename
+        let connStr = sprintf "Data Source =%s;Version=3;" filename
         let conn = new SqliteConnection(connStr)
         conn.Open()
 
@@ -198,15 +198,13 @@ module DB =
         |> Seq.cache
 
     let doesComicExist conn comicID =
-        let sql = "select id from comics where id=$id"
+        let sql = "select count(id) from comics where id=$id"
         let cmd = new SqliteCommand(sql, conn)
         cmd.Parameters.AddWithValue("$id", comicID) |> ignore
-        let reader = cmd.ExecuteReader()
-        seq {
-            while reader.Read() do
-                yield reader.["id"]
-        }
-        |> Seq.length > 0
+        let numRows = cmd.ExecuteScalar()
+        match Convert.ToInt32(numRows) with
+        | x when x = 0 -> false
+        | x -> true
 
     let getNewComics conn comicIDs =
         let sql = "select id from comics"
@@ -322,6 +320,7 @@ module main =
         |> bindOption (fun comicTitles ->
             let newComics =
                 comicTitles
+                //|> Seq.take 45
                 |> Seq.map (fun comicTitle ->
                     let comicID = extractID comicTitle
                     // Using this instead of tupleChooser because it extracts the comicID value for us
@@ -366,12 +365,16 @@ module main =
                 |> RSS.ofComics
                 |> RSS.stringOfFeed outFile
 
+            conn.Close()
+
             Some "success"
         )
         |> (fun ret ->
             match ret with
             | None ->
                 logger.Fatal("Could not retrieve comic titles!")
-                255
-            | Some ret -> 0
+                exit 255
+            | Some ret ->
+                logger.Debug("Success! Exiting.")
+                exit 0
         )
