@@ -64,7 +64,6 @@ module QCFetcher =
         let web = new HtmlWeb()
         let page = web.Load(url)
         logger.Debug("Archives fetched")
-        //printfn "%s" page.DocumentNode.OuterHtml
         let nodes = page.DocumentNode.SelectNodes(@"//div[@id=""archive""]/a")
         match nodes with
         | null ->
@@ -333,8 +332,8 @@ module main =
                     | Some comicID -> Some (comicID,comicTitle)
                 )
                 |> Seq.choose id
-                |> Seq.filter (fun (comicID,_) -> comicID > 1710 && comicID < 1725)
-                //|> Seq.filter (fun (comicID, comicTitle) -> not @@ DB.doesComicExist conn comicID)
+                //|> Seq.filter (fun (comicID,_) -> comicID > 1710 && comicID < 1725)
+                |> Seq.filter (fun (comicID, comicTitle) -> not @@ DB.doesComicExist conn comicID)
 
             let updatedComics =
                 newComics
@@ -351,6 +350,19 @@ module main =
 
             DB.getComics conn
                 |> Seq.take 15
+                |> (fun comics ->
+                    let rangeStart =
+                        comics
+                        |> Seq.last
+                        |> (fun comic -> comic.id)
+
+                    let rangeFinish =
+                        comics
+                        |> Seq.head
+                        |> (fun comic -> comic.id)
+                    logger.Info(sprintf "Writing feed for #%d - #%d" rangeStart rangeFinish)
+                    comics
+                )
                 |> RSS.ofComics
                 |> RSS.stringOfFeed outFile
 
