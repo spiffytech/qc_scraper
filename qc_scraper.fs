@@ -258,14 +258,22 @@ module RSS =
         feed.LastUpdatedTime <- new DateTimeOffset(DateTime.Now);
         feed.Generator <- "Script by spiffytech - https://github.com/spiffytech/qc_scraper"
 
-        feed.Links.Add @@ new SyndicationLink(new Uri(baseURL + "/feed.xml"));
-
         feed.Items <- Seq.map ofComic comics
+
+        // PubSubHubbub support
+        let hubbubLink1 = new SyndicationLink(new Uri("https://pubsubhubbub.appspot.com/"))
+        hubbubLink1.RelationshipType <- "hub"
+        feed.Links.Add hubbubLink1
+
+        let hubbubLink2 = new SyndicationLink(new Uri(baseURL + "/feed.xml"))
+        hubbubLink2.RelationshipType <- "self"
+        feed.Links.Add hubbubLink2
+
         feed
 
     let stringOfFeed (filename:string) (feed:SyndicationFeed) =
         let xmlWriter = XmlWriter.Create filename
-        feed.SaveAsRss20 xmlWriter
+        feed.SaveAsAtom10 xmlWriter
         xmlWriter.Close()
         logger.Info("RSS file written")
 
