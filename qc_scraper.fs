@@ -17,7 +17,7 @@ module GenericUtils =
             yield! fn @@ Seq.truncate chunkSize s
             match (Seq.length s) with
             | x when x <= chunkSize -> yield! Seq.empty
-            | x ->
+            | _ ->
                 let skippedSeq = Seq.skip chunkSize s
                 yield! seqChunkedMap chunkSize fn (Seq.skip chunkSize s)
         }
@@ -32,7 +32,7 @@ let tupleChooser fn =
     (fun tuple ->
         let value = fn tuple
         match value with
-        | Some value -> Some tuple
+        | Some _ -> Some tuple
         | None -> None
     )
 
@@ -71,13 +71,7 @@ module QCFetcher =
             None
         | _ ->
             nodes
-            |> Seq.map (fun node ->
-                let link =
-                    node.Attributes
-                    |> Seq.find (fun attr -> attr.Name = "href")
-                    |> (fun attr -> attr.Value)
-                node.InnerHtml
-            )
+            |> Seq.map (fun node -> node.InnerHtml)
             |> Seq.cache
             |> Some
 
@@ -107,7 +101,7 @@ module QCFetcher =
                 logger.Debug(sprintf "#%d post date = %s" comicID @@ resp'.LastModified.ToString())
                 return Some resp'.LastModified
             with  // 404, etc.
-                | ex ->
+                | _ ->
                     logger.Warn(sprintf "Exception fetching #%d" comicID)
                     return None
         }
@@ -204,7 +198,7 @@ module DB =
         let numRows = cmd.ExecuteScalar()
         match Convert.ToInt32(numRows) with
         | x when x = 0 -> false
-        | x -> true
+        | _ -> true
 
     let getNewComics conn comicIDs =
         let sql = "select id from comics"
@@ -249,8 +243,7 @@ module RSS =
         item.Content <- new TextSyndicationContent(imgLink + comic.body, TextSyndicationContentKind.Html)
         item
 
-    let ofComics comics =
-        let baseURL = "http://questionablecontent.spiffyte.ch"
+    let ofComics feedURL comics =
         let feed = new SyndicationFeed()
         feed.Id <- "http://questionablecontent.spiffyte.ch"
         feed.Title <- TextSyndicationContent "Questionable Content (unofficial)"
@@ -258,16 +251,9 @@ module RSS =
         feed.LastUpdatedTime <- new DateTimeOffset(DateTime.Now);
         feed.Generator <- "Script by spiffytech - https://github.com/spiffytech/qc_scraper"
 
+        feed.Links.Add @@ new SyndicationLink(new Uri(feedURL))
+
         feed.Items <- Seq.map ofComic comics
-
-        // PubSubHubbub support
-        let hubbubLink1 = new SyndicationLink(new Uri("https://pubsubhubbub.appspot.com/"))
-        hubbubLink1.RelationshipType <- "hub"
-        feed.Links.Add hubbubLink1
-
-        let hubbubLink2 = new SyndicationLink(new Uri(baseURL + "/feed.xml"))
-        hubbubLink2.RelationshipType <- "self"
-        feed.Links.Add hubbubLink2
 
         feed
 
@@ -277,8 +263,33 @@ module RSS =
         xmlWriter.Close()
         logger.Info("RSS file written")
 
+module PubSubHubbub =
+    open System.ServiceModel.Syndication
+    open RestSharp
+
+    //let addToFeed feedURL (feed:SyndicationFeed) =
+    let addToFeed feedURL (feed:SyndicationFeed) =
+        // PubSubHubbub support
+        let hubbubLink1 = new SyndicationLink(new Uri("https://pubsubhubbub.appspot.com/"))
+        hubbubLink1.RelationshipType <- "hub"
+        feed.Links.Add hubbubLink1
+
+        let hubbubLink2 = new SyndicationLink(new Uri(feedURL))
+        hubbubLink2.RelationshipType <- "self"
+        feed.Links.Add hubbubLink2
+
+        feed
+
+    let notify feedURL =
+        let client = RestClient "https://pubsubhubbub.appspot.com"
+        let request = RestRequest("/", Method.POST)
+        request.AddParameter("hub.mode", "publish") |> ignore
+        request.AddParameter("hub.url", feedURL) |> ignore
+        client.Execute request |> ignore
+
 module main =
     open QCFetcher
+    open PubSubHubbub
     open NLog
     LoggerConfig.setLogLevel LogLevel.Debug
     let logger = LogManager.GetLogger("main")
@@ -359,6 +370,7 @@ module main =
             )
             |> Seq.iter (fun comic -> DB.upsertComic conn comic)
 
+            let feedURL = "http://questionablecontent.spiffyte.ch/feed.xml"
             DB.getComics conn
                 |> Seq.take 15
                 |> (fun comics ->
@@ -374,8 +386,11 @@ module main =
                     logger.Info(sprintf "Writing feed for #%d - #%d" rangeStart rangeFinish)
                     comics
                 )
-                |> RSS.ofComics
+                |> RSS.ofComics feedURL
+                |> PubSubHubbub.addToFeed feedURL
                 |> RSS.stringOfFeed outfile
+
+            notify feedURL
 
             conn.Close()
 

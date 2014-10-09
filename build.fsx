@@ -18,6 +18,7 @@ Target "Default" (fun _ ->
         "/usr/local/lib/mono/4.5/Mono.Data.Sqlite.dll";
         "/usr/local/lib/mono/4.5/System.ServiceModel.dll";
         "tools/NLog/lib/net45/NLog.dll";
+        "tools/RestSharp/lib/net4/RestSharp.dll";
     ]
 
     ["qc_scraper.fs"]
