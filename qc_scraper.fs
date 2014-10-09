@@ -266,10 +266,13 @@ module RSS =
 module PubSubHubbub =
     open System.ServiceModel.Syndication
     open RestSharp
+    open NLog
+    let logger = LogManager.GetLogger("PubSubHubbub")
 
     //let addToFeed feedURL (feed:SyndicationFeed) =
     let addToFeed feedURL (feed:SyndicationFeed) =
-        // PubSubHubbub support
+        logger.Debug("Adding Pubsubhubbub support to the feed")
+
         let hubbubLink1 = new SyndicationLink(new Uri("https://pubsubhubbub.appspot.com/"))
         hubbubLink1.RelationshipType <- "hub"
         feed.Links.Add hubbubLink1
@@ -281,6 +284,7 @@ module PubSubHubbub =
         feed
 
     let notify feedURL =
+        logger.Info("Notifying Pubsubhubbub")
         let client = RestClient "https://pubsubhubbub.appspot.com"
         let request = RestRequest("/", Method.POST)
         request.AddParameter("hub.mode", "publish") |> ignore
