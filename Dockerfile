@@ -1,8 +1,12 @@
-FROM thaiphan/mono:3.6.0.39
+FROM mono:3.8
 
 RUN mkdir /data
 ADD blah.db /data/blah.db
 
-ADD build /build
+RUN apt-get update && apt-get install libmono-sqlite4.0-cil
 
-CMD cd /data && mono --debug /build/qc_scraper.exe /data/feed.xml
+ADD . /src
+WORKDIR /src
+RUN ./fakebuild.sh
+
+CMD mono --debug build/qc_scraper.exe /data/feed.xml

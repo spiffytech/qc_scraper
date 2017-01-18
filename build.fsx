@@ -15,8 +15,8 @@ Target "Clean" (fun _ ->
 Target "Default" (fun _ ->
     let references = [
         "tools/HtmlAgilityPack/lib/Net45/HtmlAgilityPack.dll";
-        "/usr/local/lib/mono/4.5/Mono.Data.Sqlite.dll";
-        "/usr/local/lib/mono/4.5/System.ServiceModel.dll";
+        "/usr/lib/mono/4.5/Mono.Data.Sqlite.dll";
+        "/usr/lib/mono/4.5/System.ServiceModel.dll";
         "tools/NLog/lib/net45/NLog.dll";
         "tools/RestSharp/lib/net4/RestSharp.dll";
     ]
