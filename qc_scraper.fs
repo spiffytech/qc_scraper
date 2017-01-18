@@ -64,7 +64,7 @@ module QCFetcher =
         let web = new HtmlWeb()
         let page = web.Load(url)
         logger.Debug("Archives fetched")
-        let nodes = page.DocumentNode.SelectNodes(@"//div[@id=""archive""]/a")
+        let nodes = page.DocumentNode.SelectNodes(@"//div[@id=""container""]/div[@class=""row""]/div[@class=""small-12 medium-expand column""]/a")
         match nodes with
         | null ->
             logger.Fatal("Could not parse archives")
